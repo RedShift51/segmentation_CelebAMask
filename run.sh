@@ -1,0 +1,1 @@
+sudo docker run --gpus all -it -v /home/alex/tools/sber/3/storage:/storage -v /home/alex/tools/sber/3/code:/code -v /home/alex/Downloads/CelebAMask-HQ:/home/alex/Downloads/CelebAMask-HQ segm_sb:latest bash
