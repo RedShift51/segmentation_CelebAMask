@@ -49,10 +49,10 @@ class segmGenerator:
         mask_name_ = "0" * (5 - len(obj_idx)) + obj_idx + "_hair.png"
 
         curr_item_ = cv2.imread(os.path.join(self.path_data_, "CelebA-HQ-img", curr_item_))
-        curr_item_ = cv2.resize(curr_item_, (256, 256))
+        curr_item_ = cv2.resize(curr_item_, (128, 128))
         curr_item_ = cv2.cvtColor(curr_item_, cv2.COLOR_BGR2RGB) / 255.
         curr_mask_ = cv2.imread(os.path.join(self.masks_path_, path_mask_, mask_name_))
-        curr_mask_ = cv2.resize(curr_mask_, (256, 256))
+        curr_mask_ = cv2.resize(curr_mask_, (128, 128))
         curr_mask_ = np.sum(curr_mask_, -1, keepdims=True).astype(np.float32)
 
         curr_mask_ /= np.max(curr_mask_)
@@ -175,7 +175,7 @@ class unet:
 
 
     def build_raw_unet(self):
-       x = Input(shape=[256, 256, 3])
+       x = Input(shape=[128, 128, 3])
        x_intermed = self.encoder(x, "raw")
        x_out = self.decoder(x_intermed, "raw", N_CLASSES=1)
        self.model_ = tf.keras.Model(inputs=x, outputs=x_out)
@@ -204,7 +204,7 @@ class unet:
     def build_enh_unet(self):
         spn = spnStage()
 
-        x = Input(shape=[256, 256, 3])
+        x = Input(shape=[128, 128, 3])
         x_intermed = self.encoder(x, "raw")
         x_out = self.decoder(x_intermed, "raw", N_CLASSES=1)
 
