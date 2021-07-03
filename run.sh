@@ -1,1 +1,1 @@
-sudo docker run --gpus all -it -v /home/alex/tools/sber/3/storage:/storage -v /home/alex/tools/sber/3/code:/code -v /home/alex/Downloads/CelebAMask-HQ:/home/alex/Downloads/CelebAMask-HQ segm_sb:latest bash
+sudo docker run --gpus all -it -v /home/alex/tools/segmentation_CelebAMask/storage:/storage -v /home/alex/tools/segmentation_CelebAMask/code:/code -v /home/alex/tools/Human-Segmentation-Dataset:/Train_Data segm_sb:latest bash

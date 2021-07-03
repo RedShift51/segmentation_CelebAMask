@@ -12,25 +12,26 @@ from spn import *
 
 
 # batch size = 1
-class segmGenerator:
+class segmGeneratorSimple:
     def __init__(self, path_data, images, batch_size=1):
         self.path_data_ = path_data
         self.batch_size_ = batch_size
+        self.cut = 32
 
         self.imgs_ = images#os.listdir(os.path.join(path_data, "CelebA-HQ-img"))
-        self.masks_path_ = os.path.join(path_data, "CelebAMask-HQ-mask-anno")
+        self.masks_ = os.path.join(path_data, "images-gt")
         self.n = len(self.imgs_)
-        self.i = 0
+        self.i = -1
 
     def __len__(self):
         return len(self.imgs_)
 
     def __next__(self):
+        self.i += 1
         if self.i == self.n:
             raise StopIteration()
         else:
             return self.__getitem__(self.i)
-        self.i += 1
 
     def __iter__(self):
         return self
@@ -40,52 +41,76 @@ class segmGenerator:
         return self
 
     def __getitem__(self, idx):
-        # original images have resolution 1024x1024, and I resized them by 256x256
-
         curr_item_ = self.imgs_[idx]
 
         obj_idx = curr_item_[:curr_item_.find(".")]
-        path_mask_ = str(int(int(obj_idx) / 2000))
-        mask_name_ = "0" * (5 - len(obj_idx)) + obj_idx + "_hair.png"
+        #path_mask_ = str(int(int(obj_idx) / 2000))
+        mask_name_ = curr_item_[: \
+                        curr_item_.rfind(".")] + ".png"
+        #"0" * (5 - len(obj_idx)) + obj_idx + "_hair.png"
 
-        curr_item_ = cv2.imread(os.path.join(self.path_data_, "CelebA-HQ-img", curr_item_))
-        curr_item_ = cv2.resize(curr_item_, (128, 128))
+        curr_item_ = cv2.imread(os.path.join(self.path_data_, "images", curr_item_))
+        #curr_item_ = cv2.resize(curr_item_, (128, 128))
         curr_item_ = cv2.cvtColor(curr_item_, cv2.COLOR_BGR2RGB) / 255.
-        curr_mask_ = cv2.imread(os.path.join(self.masks_path_, path_mask_, mask_name_))
-        curr_mask_ = cv2.resize(curr_mask_, (128, 128))
-        curr_mask_ = np.sum(curr_mask_, -1, keepdims=True).astype(np.float32)
+        dx = self.cut - curr_item_.shape[0] % self.cut
+        dx = 0 if dx == self.cut else dx
 
+        dy = self.cut - curr_item_.shape[1] % self.cut
+        dy = 0 if dy == self.cut else dy
+        #print("----------", dx, dy, curr_item_.shape)
+        if dx > 0:
+            curr_item_ = np.concatenate([curr_item_, 
+				np.zeros((dx, curr_item_.shape[1], 3))], axis=0)
+        if dy > 0:
+            curr_item_ = np.concatenate([curr_item_, 
+				np.zeros((curr_item_.shape[0], dy, 3))], axis=1)
+
+        curr_mask_ = cv2.imread(os.path.join(self.masks_, mask_name_))
+        curr_mask_ = np.sum(curr_mask_, -1, keepdims=False).astype(np.float32)
         curr_mask_ /= np.max(curr_mask_)
         curr_mask_ = curr_mask_.astype(np.int32)
+        if dx > 0:
+            curr_mask_ = np.concatenate([curr_mask_, 
+				np.zeros((dx, curr_mask_.shape[1])).astype(np.int32)], axis=0)
+        if dy > 0:
+            curr_mask_ = np.concatenate([curr_mask_, 
+             np.zeros((curr_mask_.shape[0], dy)).astype(np.int32)], axis=1)
+        #print(curr_item_.shape, curr_mask_.shape, "=================================")
+        #print(np.mean(curr_mask_))
 
         return np.expand_dims(curr_item_, 0), np.expand_dims(curr_mask_, 0)
 
 
 class unet:
-    def __init__(self, path_data, logdir="summary", epochs=5):
+    def __init__(self, path_data, logdir="summary", epochs=5, n_classes=2):
         self.initializer = "he_normal"
         self.model_ = None
         self.epochs_ = epochs
+        self.N_CLASSES = n_classes
 
         # data preprocessing
         self.path_data_ = path_data
 
-        self.imgs_all_ = os.listdir(os.path.join(path_data, "CelebA-HQ-img"))
+        self.imgs_all_ = os.listdir(os.path.join(path_data, "images"))
         split = int(len(self.imgs_all_) * 0.9)
         np.random.shuffle(self.imgs_all_)
         self.train_data_ = tf.data.Dataset.from_generator(
-                    segmGenerator(path_data, self.imgs_all_[:int(split/9)]),
+                    segmGeneratorSimple(path_data, self.imgs_all_[:int(split)]),
                         output_types=(tf.float32, tf.int32),
-                        output_shapes=((None,None,None,3), (None, None, None,1)))
+                        output_shapes=((None,None,None,3), (None, None, None)))
 
         self.valid_data_ = tf.data.Dataset.from_generator(
-                        segmGenerator(path_data, self.imgs_all_[split:]),
+                        segmGeneratorSimple(path_data, self.imgs_all_[split:]),
                         output_types=(tf.float32, tf.int32),
-                        output_shapes=((None,None,None,3), (None, None, None,1)))
+                        output_shapes=((None,None,None,3), (None, None, None)))
 
         self.steps_per_epoch_ = split
         self.initializer = "he_normal"
         self.logdir_ = logdir
+        self.optimizer = tf.optimizers.Adam( learning_rate=0.001 )
+
+        # construct variables
+
 
     def encoder(self, x, scope):
         initializer = self.initializer
@@ -127,7 +152,7 @@ class unet:
 
         return conv_enc_1, conv_enc_2, conv_enc_3, conv_enc_4, conv
 
-    def decoder(self, x, scope, N_CLASSES=1):
+    def decoder(self, x, scope, nclassout):
         initializer = self.initializer
         with tf.name_scope(scope):
             conv_enc_1, conv_enc_2, conv_enc_3, conv_enc_4, conv = x
@@ -165,22 +190,30 @@ class unet:
                             kernel_initializer = initializer)(merge_dec_4)
             conv_dec_4 = Conv2D(64, 3, activation = 'relu', padding = 'same', 
                             kernel_initializer = initializer)(conv_dec_4)
-            conv_dec_4 = Conv2D(2, 3, activation = 'relu', padding = 'same', 
-                            kernel_initializer = initializer)(conv_dec_4)
+            #conv_dec_4 = Conv2D(2, 3, activation = 'relu', padding = 'same', 
+            #                kernel_initializer = initializer)(conv_dec_4)
             # -- Dencoder -- #
 
-            output = Conv2D(N_CLASSES, 1, activation = 'sigmoid')(conv_dec_4)
-
+            output = Conv2D(nclassout, 1, activation = 'softmax')(conv_dec_4)
+            output = tf.clip_by_value(output, 0.00001, 0.99999)
+            #print(output)
         return output
+
+    def build_nn(self, type_arch="unet_weak"):
+        if type_arch == "unet_weak":
+            self.build_raw_unet()
+        elif type_arch == "unet_enh":
+            self.build_enh_unet()
 
 
     def build_raw_unet(self):
-       x = Input(shape=[128, 128, 3])
+       x = Input(shape=[None, None, 3])
        x_intermed = self.encoder(x, "raw")
-       x_out = self.decoder(x_intermed, "raw", N_CLASSES=1)
+       x_out = self.decoder(x_intermed, "raw", self.N_CLASSES)
        self.model_ = tf.keras.Model(inputs=x, outputs=x_out)
        self.model_.compile(optimizer=Adam(learning_rate=0.001), 
-                loss=tf.keras.losses.BinaryCrossentropy(), metrics=["accuracy", self.iou])
+                loss=tf.keras.losses.SparseCategoricalCrossentropy(
+                  reduction=tf.keras.losses.Reduction.SUM), metrics=["accuracy", self.iou])
        #print("=================================================")
        print(self.model_.summary()) 
        return self.model_
@@ -204,18 +237,47 @@ class unet:
     def build_enh_unet(self):
         spn = spnStage()
 
-        x = Input(shape=[128, 128, 3])
+        x = Input(shape=[None, None, 3])
         x_intermed = self.encoder(x, "raw")
-        x_out = self.decoder(x_intermed, "raw", N_CLASSES=1)
+        x_out = self.decoder(x_intermed, "raw", self.N_CLASSES)
 
-        x_out_for_spn = self.decoder(x_intermed, "spn", N_CLASSES=4)
+        x_out_for_spn = self.decoder(x_intermed, "spn", self.N_CLASSES*4)
         x_out_model = spn.spnForward(x_out, x_out_for_spn)
 
         self.model_ = tf.keras.Model(inputs=x, outputs=x_out_model)
         self.model_.compile(optimizer=Adam(learning_rate=0.001), 
-                loss=tf.keras.losses.BinaryCrossentropy(), metrics=["accuracy", self.iou])
+                loss=tf.keras.losses.SparseCategoricalCrossentropy(
+                 reduction=tf.keras.losses.Reduction.SUM), metrics=["accuracy", self.iou])
         return self.model_
 
+    def loss(self, pred, target):
+        #tf.print(pred.shape, target.shape, "------------------------------")
+        local_loss = tf.keras.losses.sparse_categorical_crossentropy(target, pred)
+        return tf.reduce_mean(local_loss)
+
+    def train_step(self, inputs, outputs):
+        current_loss = 0
+        with tf.GradientTape() as tape:
+            #tf.print(inputs.shape, "--------------------")
+            current_loss = self.loss(self.model_(inputs), outputs)
+        tf.print(current_loss)
+        grads = tape.gradient(current_loss, self.model_.trainable_variables)
+        self.optimizer.apply_gradients(zip(grads, self.model_.trainable_variables))
+
+    def train(self):
+        for epo_ in range(self.epochs_):
+            for features in self.train_data_:
+                image, label = features
+                self.train_step(image, label)
+
+
+            for features in self.valid_data_:
+                image, label = features
+                net_out = self.model_(image)
+                curr_loss = self.loss(net_out, label)
+                tf.print("valid", curr_loss, self.iou(label, tf.math.argmax(net_out, axis=-1)))
+ 
+    """
     def train(self):
         tensorboard_callback = tf.keras.callbacks.TensorBoard(self.logdir_, histogram_freq=1)
         callbacks_ = [tf.keras.callbacks.EarlyStopping(patience=10, verbose=1),
@@ -224,9 +286,9 @@ class unet:
                     verbose=1, save_best_only=True, save_weights_only=True)]
 
         history_ = self.model_.fit(self.train_data_, epochs=self.epochs_, 
-                                steps_per_epoch=int(self.steps_per_epoch_/9), 
+                                steps_per_epoch=int(self.steps_per_epoch_), 
                                 validation_steps=int(len(self.imgs_all_) * 0.1),
                                 validation_data=self.valid_data_, callbacks=callbacks_)
         return history_
-
+    """
 

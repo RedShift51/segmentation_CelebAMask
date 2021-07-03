@@ -18,9 +18,10 @@ import matplotlib.pyplot as plt
 
 def parse_args():
     parser_ = argparse.ArgumentParser()
-    parser_.add_argument("--path", type=str, default="/home/alex/Downloads/CelebAMask-HQ")
-    parser_.add_argument("--epochs", type=int, default=5)
+    parser_.add_argument("--path", type=str, default="/Train_Data")
+    parser_.add_argument("--epochs", type=int, default=50)
     parser_.add_argument("--logdir", type=str, default="summary")
+    parser_.add_argument("--nn_type", type=str, default="unet_weak")
     args_ = parser_.parse_args()
 
     return vars(args_)
@@ -42,7 +43,8 @@ def train():
         1/0
     """
     network = unet(path_data=args["path"], epochs=args["epochs"], logdir=args["logdir"])
-    network.build_raw_unet()
+    network.build_nn(args["nn_type"])
+    #raw_unet()
     network.train()
 
 
