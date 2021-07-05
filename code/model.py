@@ -82,11 +82,12 @@ class segmGeneratorSimple:
 
 
 class unet:
-    def __init__(self, path_data, logdir="summary", epochs=5, n_classes=2):
+    def __init__(self, path_data, logdir="summary", epochs=5, n_classes=2, model_name="unet.h5"):
         self.initializer = "he_normal"
         self.model_ = None
         self.epochs_ = epochs
         self.N_CLASSES = n_classes
+        self.model_name_ = model_name
 
         # data preprocessing
         self.path_data_ = path_data
@@ -109,7 +110,9 @@ class unet:
         self.logdir_ = logdir
         self.optimizer = tf.optimizers.Adam( learning_rate=0.001 )
 
-        # construct variables
+        # checkpoint manager
+        self.cpkt_ = None
+        self.manager_ = None
 
 
     def encoder(self, x, scope):
@@ -204,16 +207,18 @@ class unet:
             self.build_raw_unet()
         elif type_arch == "unet_enh":
             self.build_enh_unet()
-
+        #self.cpkt_ = tf.train.Checkpoint(step=tf.Variable(1), optimizer=self.optimizer,
+        #        net=self.model_, iterator=iter(self.train_data_))
+        #self.manager_ = tf.train.CheckpointManager(self.cpkt_, "./model", max_to_keep=3)
 
     def build_raw_unet(self):
        x = Input(shape=[None, None, 3])
        x_intermed = self.encoder(x, "raw")
        x_out = self.decoder(x_intermed, "raw", self.N_CLASSES)
        self.model_ = tf.keras.Model(inputs=x, outputs=x_out)
-       self.model_.compile(optimizer=Adam(learning_rate=0.001), 
-                loss=tf.keras.losses.SparseCategoricalCrossentropy(
-                  reduction=tf.keras.losses.Reduction.SUM), metrics=["accuracy", self.iou])
+       self.model_.compile()#optimizer=Adam(learning_rate=0.001), 
+       #         loss=tf.keras.losses.SparseCategoricalCrossentropy(
+       #           reduction=tf.keras.losses.Reduction.SUM), metrics=["accuracy", self.iou])
        #print("=================================================")
        print(self.model_.summary()) 
        return self.model_
@@ -224,9 +229,9 @@ class unet:
         # Flatten
         y_true_f = tf.reshape(y_true, [-1])
         y_pred_f = tf.reshape(y_pred, [-1])
-        intersection = tf.reduce_sum(y_true_f * y_pred_f)
-        score = intersection / (tf.reduce_sum(y_true_f)
-             + tf.reduce_sum(y_pred_f) - intersection)
+        intersection = tf.cast(tf.reduce_sum(y_true_f * y_pred_f), dtype=tf.float32)
+        score = intersection / (tf.cast(tf.reduce_sum(y_true_f), dtype=tf.float32)
+             + tf.cast(tf.reduce_sum(y_pred_f), dtype=tf.float32) - intersection)
         return score
 
     def iou(self, y_true, y_pred):
@@ -245,9 +250,9 @@ class unet:
         x_out_model = spn.spnForward(x_out, x_out_for_spn)
 
         self.model_ = tf.keras.Model(inputs=x, outputs=x_out_model)
-        self.model_.compile(optimizer=Adam(learning_rate=0.001), 
-                loss=tf.keras.losses.SparseCategoricalCrossentropy(
-                 reduction=tf.keras.losses.Reduction.SUM), metrics=["accuracy", self.iou])
+        self.model_.compile()#optimizer=Adam(learning_rate=0.001), 
+        #        loss=tf.keras.losses.SparseCategoricalCrossentropy(
+        #         reduction=tf.keras.losses.Reduction.SUM), metrics=["accuracy", self.iou])
         return self.model_
 
     def loss(self, pred, target):
@@ -266,17 +271,28 @@ class unet:
 
     def train(self):
         for epo_ in range(self.epochs_):
-            for features in self.train_data_:
-                image, label = features
-                self.train_step(image, label)
+            self.train_epoch()
+            tf.keras.models.save_model(self.model_, "model")
+            #self.model_.save_weights("model/my_cp")
+            #self.manager_.write()
+            #self.manager_.update_state()
+            #self.manager_.save()
 
+    @tf.function
+    def train_epoch(self):
+        for features in self.train_data_:
+            image, label = features
+            self.train_step(image, label)
+            #self.cpkt_.step.assign_add(1)
+            #self.manager_.save()
 
-            for features in self.valid_data_:
-                image, label = features
-                net_out = self.model_(image)
-                curr_loss = self.loss(net_out, label)
-                tf.print("valid", curr_loss, self.iou(label, tf.math.argmax(net_out, axis=-1)))
- 
+        for features in self.valid_data_:
+            image, label = features
+            net_out = self.model_(image)
+            curr_loss = self.loss(net_out, label)
+            tf.print("valid", curr_loss, self.iou(label, 
+                          tf.cast(tf.math.argmax(net_out, axis=-1), dtype=tf.int32)))
+
     """
     def train(self):
         tensorboard_callback = tf.keras.callbacks.TensorBoard(self.logdir_, histogram_freq=1)
